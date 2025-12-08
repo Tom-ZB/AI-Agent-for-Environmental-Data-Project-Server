@@ -10,5 +10,6 @@ engine = create_engine(
 #创建一个会话工厂，后续通过SessionLocal()获取数据库对话对象 用于执行增删改查等操作 autocommit：自动提交 autoflush：自动刷新
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-#定义 ORM 模型的基类。所有表模型都要继承它
+#SQLAlchemy 提供的工厂函数，返回一个“基类”(Base)对象
+#所有 ORM 模型类都必须继承它，才能被 SQLAlchemy 识别为数据库表的映射
 Base = declarative_base()
