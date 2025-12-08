@@ -9,8 +9,9 @@ def save_message(conversation_id: str, role: str, content: str):
     db.commit()
     db.close()
 
+# Get chat_history from database
 def get_history(conversation_id: str):
-    db: Session = SessionLocal()
+    db: Session = SessionLocal()  #获取Session实例 来操作数据库
     messages = db.query(ConversationHistory).filter(ConversationHistory.conversation_id == conversation_id).all()
     db.close()
     return "\n".join([f"{m.role}: {m.content}" for m in messages]) if messages else "（暂无历史）"
