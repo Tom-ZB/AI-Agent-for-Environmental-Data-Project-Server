@@ -2,7 +2,8 @@ import os
 from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
 from langchain_community.vectorstores import Chroma
-from langchain_core.prompts import PromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_core.runnables import RunnableMap
@@ -15,32 +16,24 @@ llm = ChatOpenAI(
     model="gpt-4.1-nano",
     base_url=base_url,
     api_key=api_key,
-    max_tokens=200,
+    max_tokens=2000,
     temperature=0.7
 )
 
-prompt_template = """你是一个基于文档的问答助手。
-请使用以下提供的文本内容来回答问题，仅使用提供的文本信息。
-如果文本中没有相关的信息，请回答“抱歉，提供的文本中没有这个信息”。
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant."),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "If the question relates to the text below, use it:\n{context}\n\nOtherwise, just respond naturally.\n\nQuestion: {question}")
+])
 
-对话历史：
-{history}
 
-文本内容：
-{context}
-
-问题：{question}
-
-回答：
-"""
-prompt = PromptTemplate.from_template(prompt_template)
 
 # 文档加载与向量库初始化
 file_path = "test.txt"
 text_loader = TextLoader(file_path, encoding="utf-8")
 documents = text_loader.load()
 
-splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+splitter = CharacterTextSplitter(chunk_size=200, chunk_overlap=20)
 texts = splitter.split_documents(documents)
 
 embedding_model = OpenAIEmbeddings(
@@ -52,14 +45,19 @@ embedding_model = OpenAIEmbeddings(
 vectorstore = Chroma.from_documents(
     documents=texts,
     embedding=embedding_model,
-    persist_directory="chroma2"
+    # persist_directory="chroma2"
 )
 
 retriever = vectorstore.as_retriever(
     search_type="similarity_score_threshold",
-    search_kwargs={"score_threshold":0.1, "k":3}
+    search_kwargs={
+        "score_threshold": 0.5,   # 自定义阈值
+        "k": 3
+    }
 )
 
+
+#这里字典x实际就是传入的inputs字典 这里就是做了映射
 chain = RunnableMap({
     "question": lambda x: x["question"],
     "context": lambda x: x["context"],
@@ -68,10 +66,42 @@ chain = RunnableMap({
 
 def build_inputs(question: str, history: str):
     docs = retriever.invoke(question)
-    context = "\n\n".join(d.page_content for d in docs) if docs else "（未找到相关内容）"
+    context = "\n\n".join(d.page_content for d in docs) if docs else ""
     return {"question": question, "context": context, "history": history}
 
-def run_rag(question: str, history: str):
-    inputs = build_inputs(question, history)
+def convert_history(raw_history):
+    msgs = []
+    for role, content in raw_history:
+        if role.lower() == "user":
+            msgs.append(HumanMessage(content=content))
+        else:
+            msgs.append(AIMessage(content=content))
+    return msgs
+
+def run_rag(question: str, history_raw: list):
+    # 转换成 LangChain 消息格式
+    history = convert_history(history_raw)
+
+    docs = retriever.invoke(question)
+    print("RAG docs:", docs)
+
+    if not docs:
+        # 无文档 → 纯自然对话
+        return llm.invoke([
+            ("system", "You are a helpful assistant."),
+            *history,
+            ("human", question)
+        ]).content, ""
+
+    # 有文档 → RAG
+    context = "\n\n".join(d.page_content for d in docs)
+    inputs = {
+        "question": question,
+        "context": context,
+        "history": history,
+    }
     result = chain.invoke(inputs)
-    return result.content, inputs["context"]
+
+    return result.content, context
+
+
